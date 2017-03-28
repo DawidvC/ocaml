@@ -25,7 +25,9 @@ type file_kind = ML | MLI;;
 let load_path = ref ([] : (string * string array) list)
 let ml_synonyms = ref [".ml"]
 let mli_synonyms = ref [".mli"]
+let shared = ref false
 let native_only = ref false
+let bytecode_only = ref false
 let error_occurred = ref false
 let raw_dependencies = ref false
 let sort_files = ref false
@@ -219,15 +221,7 @@ let print_raw_dependencies source_file deps =
 
 let report_err exn =
   error_occurred := true;
-  match exn with
-    | Sys_error msg ->
-        Format.fprintf Format.err_formatter "@[I/O error:@ %s@]@." msg
-    | x ->
-        match Location.error_of_exn x with
-        | Some err ->
-            Format.fprintf Format.err_formatter "@[%a@]@."
-              Location.report_error err
-        | None -> raise x
+  Location.report_exception Format.err_formatter exn
 
 let tool_name = "ocamldep"
 
@@ -279,20 +273,20 @@ let read_and_approximate inputfile =
     report_err exn;
     !Depend.free_structure_names
 
-let read_parse_and_extract parse_function extract_function def magic
-    source_file =
+let read_parse_and_extract parse_function extract_function def ast_kind
+                           source_file =
   Depend.free_structure_names := Depend.StringSet.empty;
   try
     let input_file = Pparse.preprocess source_file in
     begin try
       let ast =
         Pparse.file ~tool_name Format.err_formatter
-                    input_file parse_function magic
+                    input_file parse_function ast_kind
       in
       let bound_vars =
         List.fold_left
           (fun bv modname ->
-            Depend.open_module bv (Longident.Lident modname))
+            Depend.open_module bv (Longident.parse modname))
           !module_map ((* PR#7248 *) List.rev !Clflags.open_modules)
       in
       let r = extract_function bound_vars ast in
@@ -316,6 +310,7 @@ let print_ml_dependencies source_file extracted_deps =
     if !all_dependencies
     then [ basename ^ ".cmx"; basename ^ ".o" ]
     else [ basename ^ ".cmx" ] in
+  let shared_targets = [ basename ^ ".cmxs" ] in
   let init_deps = if !all_dependencies then [source_file] else [] in
   let cmi_name = basename ^ ".cmi" in
   let init_deps, extra_targets =
@@ -330,7 +325,12 @@ let print_ml_dependencies source_file extracted_deps =
       extracted_deps init_deps in
   if not !native_only then
     print_dependencies (byte_targets @ extra_targets) byt_deps;
-  print_dependencies (native_targets @ extra_targets) native_deps
+  if not !bytecode_only then
+    begin
+      print_dependencies (native_targets @ extra_targets) native_deps;
+      if !shared then
+        print_dependencies (shared_targets @ extra_targets) native_deps
+    end
 
 let print_mli_dependencies source_file extracted_deps =
   let basename = Filename.chop_extension source_file in
@@ -359,14 +359,14 @@ let ml_file_dependencies source_file =
   in
   let (extracted_deps, ()) =
     read_parse_and_extract parse_use_file_as_impl Depend.add_implementation ()
-                           Config.ast_impl_magic_number source_file
+                           Pparse.Structure source_file
   in
   files := (source_file, ML, extracted_deps) :: !files
 
 let mli_file_dependencies source_file =
   let (extracted_deps, ()) =
     read_parse_and_extract Parse.interface Depend.add_signature ()
-                           Config.ast_intf_magic_number source_file
+                           Pparse.Signature source_file
   in
   files := (source_file, MLI, extracted_deps) :: !files
 
@@ -494,11 +494,11 @@ let rec dump_map s0 ppf m =
 
 let process_ml_map =
   read_parse_and_extract Parse.implementation Depend.add_implementation_binding
-                         StringMap.empty Config.ast_impl_magic_number
+                         StringMap.empty Pparse.Structure
 
 let process_mli_map =
   read_parse_and_extract Parse.interface Depend.add_signature_binding
-                         StringMap.empty Config.ast_intf_magic_number
+                         StringMap.empty Pparse.Signature
 
 let parse_map fname =
   map_files := fname :: !map_files ;
@@ -544,7 +544,7 @@ let _ =
   Clflags.classic := false;
   add_to_list first_include_dirs Filename.current_dir_name;
   Compenv.readenv ppf Before_args;
-  Arg.parse [
+  Clflags.add_arguments __LOC__ [
      "-absname", Arg.Set Location.absname,
         " Show absolute filenames in error messages";
      "-all", Arg.Set all_dependencies,
@@ -572,14 +572,20 @@ let _ =
         " Print module dependencies in raw form (not suitable for make)";
      "-native", Arg.Set native_only,
         " Generate dependencies for native-code only (no .cmo files)";
+     "-bytecode", Arg.Set bytecode_only,
+        " Generate dependencies for bytecode-code only (no .cmx files)";
      "-one-line", Arg.Set one_line,
         " Output one line per file, regardless of the length";
      "-open", Arg.String (add_to_list Clflags.open_modules),
         "<module>  Opens the module <module> before typing";
+     "-plugin", Arg.String Compplugin.load,
+         "<plugin>  Load dynamic plugin <plugin>";
      "-pp", Arg.String(fun s -> Clflags.preprocessor := Some s),
          "<cmd>  Pipe sources through preprocessor <cmd>";
      "-ppx", Arg.String (add_to_list first_ppx),
          "<cmd>  Pipe abstract syntax trees through preprocessor <cmd>";
+     "-shared", Arg.Set shared,
+         " Generate dependencies for native plugin files (.cmxs targets)";
      "-slash", Arg.Set Clflags.force_slash,
          " (Windows) Use forward slash / instead of backslash \\ in file paths";
      "-sort", Arg.Set sort_files,
@@ -588,7 +594,14 @@ let _ =
          " Print version and exit";
      "-vnum", Arg.Unit print_version_num,
          " Print version number and exit";
-    ] file_dependencies usage;
+     "-args", Arg.Expand Arg.read_arg,
+         "<file> Read additional newline separated command line arguments \n\
+         \      from <file>";
+     "-args0", Arg.Expand Arg.read_arg0,
+         "<file> Read additional NUL separated command line arguments from \n\
+         \      <file>"
+  ];
+  Clflags.parse_arguments file_dependencies usage;
   Compenv.readenv ppf Before_link;
   if !sort_files then sort_files_by_dependencies !files
   else List.iter print_file_dependencies (List.sort compare !files);

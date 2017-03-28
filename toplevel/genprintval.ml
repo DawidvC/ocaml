@@ -151,15 +151,15 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
                 (fun x -> Oval_int64 (O.obj x : int64)) ))
     ] : (Path.t * printer) list)
 
-    let exn_printer ppf path =
-      fprintf ppf "<printer %a raised an exception>" Printtyp.path path
+    let exn_printer ppf path exn =
+      fprintf ppf "<printer %a raised an exception: %s>" Printtyp.path path (Printexc.to_string exn)
 
-    let out_exn path =
-      Oval_printer (fun ppf -> exn_printer ppf path)
+    let out_exn path exn =
+      Oval_printer (fun ppf -> exn_printer ppf path exn)
 
     let install_printer path ty fn =
       let print_val ppf obj =
-        try fn ppf obj with _exn -> exn_printer ppf path in
+        try fn ppf obj with exn -> exn_printer ppf path exn in
       let printer obj = Oval_printer (fun ppf -> print_val ppf obj) in
       printers := (path, Simple (ty, printer)) :: !printers
 
@@ -172,7 +172,7 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
         | Zero fn ->
             let out_printer obj =
               let printer ppf =
-                try fn ppf obj with _ -> exn_printer ppf function_path in
+                try fn ppf obj with exn -> exn_printer ppf function_path exn in
               Oval_printer printer in
             Zero out_printer
         | Succ fn ->
@@ -365,9 +365,11 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
                     tree_of_val depth obj
                       (try Ctype.apply env decl.type_params body ty_list with
                          Ctype.Cannot_apply -> abstract_type)
-                | {type_kind = Type_variant constr_list} ->
+                | {type_kind = Type_variant constr_list; type_unboxed} ->
+                    let unbx = type_unboxed.unboxed in
                     let tag =
-                      if O.is_block obj
+                      if unbx then Cstr_unboxed
+                      else if O.is_block obj
                       then Cstr_block(O.tag obj)
                       else Cstr_constant(O.obj obj) in
                     let {cd_id;cd_args;cd_res} =
@@ -393,12 +395,12 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
                           in
                           tree_of_constr_with_args (tree_of_constr env path)
                             (Ident.name cd_id) false 0 depth obj
-                            ty_args
+                            ty_args unbx
                       | Cstr_record lbls ->
                           let r =
                             tree_of_record_fields depth
                               env path type_params ty_list
-                              lbls 0 obj
+                              lbls 0 obj unbx
                           in
                           Oval_constr(tree_of_constr env path
                                         (Ident.name cd_id),
@@ -413,9 +415,12 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
                           | Record_extension -> 1
                           | _ -> 0
                         in
+                        let unbx =
+                          match rep with Record_unboxed _ -> true | _ -> false
+                        in
                         tree_of_record_fields depth
                           env path decl.type_params ty_list
-                          lbl_list pos obj
+                          lbl_list pos obj unbx
                     end
                 | {type_kind = Type_open} ->
                     tree_of_extension path depth obj
@@ -464,7 +469,7 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
         end
 
       and tree_of_record_fields depth env path type_params ty_list
-          lbl_list pos obj =
+          lbl_list pos obj unboxed =
         let rec tree_of_fields pos = function
           | [] -> []
           | {ld_id; ld_type} :: remainder ->
@@ -481,8 +486,9 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
                 if pos = 0 then tree_of_label env path name
                 else Oide_ident name
               and v =
-                nest tree_of_val (depth - 1) (O.field obj pos)
-                  ty_arg
+                if unboxed
+                then tree_of_val (depth - 1) obj ty_arg
+                else nest tree_of_val (depth - 1) (O.field obj pos) ty_arg
               in
               (lid, v) :: tree_of_fields (pos + 1) remainder
         in
@@ -497,10 +503,10 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
       tree_list start ty_list
 
       and tree_of_constr_with_args
-             tree_of_cstr cstr_name inlined start depth obj ty_args =
+             tree_of_cstr cstr_name inlined start depth obj ty_args unboxed =
         let lid = tree_of_cstr cstr_name in
         let args =
-          if inlined then
+          if inlined || unboxed then
             match ty_args with
             | [ty] -> [ tree_of_val (depth - 1) obj ty ]
             | _ -> assert false
@@ -533,7 +539,7 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
         tree_of_constr_with_args
            (fun x -> Oide_ident x) name (cstr.cstr_inlined <> None)
            1 depth bucket
-           cstr.cstr_args
+           cstr.cstr_args false
       with Not_found | EVP.Error ->
         match check_depth depth bucket ty with
           Some x -> x
@@ -553,13 +559,13 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
           begin match (Ctype.expand_head env ty).desc with
           | Tconstr (p, args, _) when Path.same p path ->
               begin try apply_generic_printer path (fn depth) args
-              with _ -> (fun _obj -> out_exn path) end
+              with exn -> (fun _obj -> out_exn path exn) end
           | _ -> find remainder end in
       find !printers
 
     and apply_generic_printer path printer args =
       match (printer, args) with
-      | (Zero fn, []) -> (fun (obj : O.t)-> try fn obj with _ -> out_exn path)
+      | (Zero fn, []) -> (fun (obj : O.t)-> try fn obj with exn -> out_exn path exn)
       | (Succ fn, arg :: args) ->
           let printer = fn (fun depth obj -> tree_of_val depth obj arg) in
           apply_generic_printer path printer args

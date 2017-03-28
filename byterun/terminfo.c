@@ -13,6 +13,8 @@
 /*                                                                        */
 /**************************************************************************/
 
+#define CAML_INTERNALS
+
 /* Read and output terminal commands */
 
 #include "caml/config.h"
@@ -62,7 +64,7 @@ CAMLprim value caml_terminfo_setup (value vchan)
     standout = tgetstr ("so", &area_p);
     standend = tgetstr ("se", &area_p);
   }
-  Assert (area_p <= area + 1024);
+  CAMLassert (area_p <= area + 1024);
   if (num_lines == -1 || up == NULL || down == NULL
       || standout == NULL || standend == NULL){
     return Bad_term;
@@ -74,7 +76,7 @@ CAMLprim value caml_terminfo_setup (value vchan)
 
 static int terminfo_putc (int c)
 {
-  putch (chan, c);
+  caml_putch (chan, c);
   return c;
 }
 

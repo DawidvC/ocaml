@@ -249,7 +249,7 @@ and set_of_closures = private {
       [let rec f a b c = f a 1 2 in], [a] -> [x] would still be a valid
       specialised argument because all recursive calls maintain the invariant.
 
-      This information is used for optimisation purposes, if such a binding is
+      This information is used for optimization purposes, if such a binding is
       known, it is possible to specialise the body of the function according
       to its parameter. This is usually introduced when specialising a
       recursive function, for instance.
@@ -300,7 +300,7 @@ and function_declarations = private {
 }
 
 and function_declaration = private {
-  params : Variable.t list;
+  params : Parameter.t list;
   body : t;
   (* CR-soon mshinwell: inconsistent naming free_variables/free_vars here and
      above *)
@@ -434,7 +434,7 @@ val free_variables_named
   -> named
   -> Variable.Set.t
 
-(** Compute _all_ variables occuring inside an expression. *)
+(** Compute _all_ variables occurring inside an expression. *)
 val used_variables
    : ?ignore_uses_as_callee:unit
   -> ?ignore_uses_as_argument:unit
@@ -546,7 +546,7 @@ end
 (** Create a function declaration.  This calculates the free variables and
     symbols occurring in the specified [body]. *)
 val create_function_declaration
-   : params:Variable.t list
+   : params:Parameter.t list
   -> body:t
   -> stub:bool
   -> dbg:Debuginfo.t
@@ -565,6 +565,12 @@ val create_function_declarations
 val update_function_declarations
    : function_declarations
   -> funs:function_declaration Variable.Map.t
+  -> function_declarations
+
+val import_function_declarations_for_pack
+   : function_declarations
+  -> (Set_of_closures_id.t -> Set_of_closures_id.t)
+  -> (Set_of_closures_origin.t -> Set_of_closures_origin.t)
   -> function_declarations
 
 (** Create a set of closures.  Checks are made to ensure that [free_vars]

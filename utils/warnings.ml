@@ -14,10 +14,10 @@
 (**************************************************************************)
 
 (* When you change this, you need to update the documentation:
-   - man/ocamlc.m   in ocaml
-   - man/ocamlopt.m in ocaml
-   - manual/cmds/comp.etex   in the doc sources
-   - manual/cmds/native.etex in the doc sources
+   - man/ocamlc.m
+   - man/ocamlopt.m
+   - manual/manual/cmds/comp.etex
+   - manual/manual/cmds/native.etex
 *)
 
 type t =
@@ -80,6 +80,9 @@ type t =
   | Ambiguous_pattern of string list        (* 57 *)
   | No_cmx_file of string                   (* 58 *)
   | Assignment_to_non_mutable_value         (* 59 *)
+  | Unused_module of string                 (* 60 *)
+  | Unboxable_type_in_prim_decl of string   (* 61 *)
+  | Constraint_on_gadt                      (* 62 *)
 ;;
 
 (* If you remove a warning, leave a hole in the numbering.  NEVER change
@@ -148,9 +151,12 @@ let number = function
   | Ambiguous_pattern _ -> 57
   | No_cmx_file _ -> 58
   | Assignment_to_non_mutable_value -> 59
+  | Unused_module _ -> 60
+  | Unboxable_type_in_prim_decl _ -> 61
+  | Constraint_on_gadt -> 62
 ;;
 
-let last_warning_number = 59
+let last_warning_number = 62
 ;;
 
 (* Must be the max number returned by the [number] function. *)
@@ -265,7 +271,7 @@ let parse_options errflag s =
   current := {error; active}
 
 (* If you change these, don't forget to change them in man/ocamlc.m *)
-let defaults_w = "+a-4-6-7-9-27-29-32..39-41..42-44-45-48-50";;
+let defaults_w = "+a-4-6-7-9-27-29-32..39-41..42-44-45-48-50-60";;
 let defaults_warn_error = "-a+31";;
 
 let () = parse_options false defaults_w;;
@@ -306,7 +312,7 @@ let message = function
   | Partial_match "" -> "this pattern-matching is not exhaustive."
   | Partial_match s ->
       "this pattern-matching is not exhaustive.\n\
-       Here is an example of a value that is not matched:\n" ^ s
+       Here is an example of a case that is not matched:\n" ^ s
   | Non_closed_record_pattern s ->
       "the following labels are not bound in this record pattern:\n" ^ s ^
       "\nEither bind these labels explicitly or add '; _' to the pattern."
@@ -472,28 +478,42 @@ let message = function
       "A potential assignment to a non-mutable value was detected \n\
         in this source file.  Such assignments may generate incorrect code \n\
         when using Flambda."
+  | Unused_module s -> "unused module " ^ s ^ "."
+  | Unboxable_type_in_prim_decl t ->
+      Printf.sprintf
+        "This primitive declaration uses type %s, which is unannotated and\n\
+         unboxable. The representation of such types may change in future\n\
+         versions. You should annotate the declaration of %s with [@@boxed]\n\
+         or [@@unboxed]." t t
+  | Constraint_on_gadt ->
+      "Type constraints do not apply to GADT cases of variant types."
 ;;
 
 let nerrors = ref 0;;
 
-let print ppf w =
-  let msg = message w in
-  let num = number w in
-  Format.fprintf ppf "%d: %s" num msg;
-  Format.pp_print_flush ppf ();
-  if (!current).error.(num) then incr nerrors
+type reporting_information =
+  { number : int
+  ; message : string
+  ; is_error : bool
+  }
+
+let report w =
+  match is_active w with
+  | false -> `Inactive
+  | true ->
+     if is_error w then incr nerrors;
+    `Active { number = number w; message = message w; is_error = is_error w }
 ;;
 
-exception Errors of int;;
+exception Errors;;
 
 let reset_fatal () =
   nerrors := 0
 
 let check_fatal () =
   if !nerrors > 0 then begin
-    let e = Errors !nerrors in
     nerrors := 0;
-    raise e;
+    raise Errors;
   end;
 ;;
 
@@ -571,6 +591,9 @@ let descriptions =
    57, "Ambiguous or-pattern variables under guard";
    58, "Missing cmx file";
    59, "Assignment to non-mutable value";
+   60, "Unused module declaration";
+   61, "Unboxable type in primitive declaration";
+   62, "Type constraint on GADT type declaration"
   ]
 ;;
 

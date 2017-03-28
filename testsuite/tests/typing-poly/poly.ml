@@ -810,7 +810,8 @@ type t = { f : 'a 'b. ('b -> (#ct as 'a) -> 'b) -> 'b; }
 type t = u and u = t;;
 [%%expect {|
 Line _, characters 0-10:
-Error: The type abbreviation t is cyclic
+Error: The definition of t contains a cycle:
+       u
 |}];;
 
 (* PR#1731 *)
@@ -912,19 +913,19 @@ type t = A | B
 - : [< `A | `B ] * t -> int = <fun>
 Line _, characters 0-41:
 Warning 8: this pattern-matching is not exhaustive.
-Here is an example of a value that is not matched:
+Here is an example of a case that is not matched:
 (`AnyExtraTag, `AnyExtraTag)
 - : [> `A | `B ] * [> `A | `B ] -> int = <fun>
 Line _, characters 0-29:
 Warning 8: this pattern-matching is not exhaustive.
-Here is an example of a value that is not matched:
+Here is an example of a case that is not matched:
 (_, 0)
 Line _, characters 21-24:
 Warning 11: this match case is unused.
 - : [< `B ] * int -> int = <fun>
 Line _, characters 0-29:
 Warning 8: this pattern-matching is not exhaustive.
-Here is an example of a value that is not matched:
+Here is an example of a case that is not matched:
 (0, _)
 Line _, characters 21-24:
 Warning 11: this match case is unused.
@@ -936,18 +937,8 @@ type ('a, 'b) a = 'a -> unit constraint 'a = [> `B of ('a, 'b) b as 'b]
 and  ('a, 'b) b = 'b -> unit constraint 'b = [> `A of ('a, 'b) a as 'a];;
 [%%expect {|
 Line _, characters 0-71:
-Error: Constraints are not satisfied in this type.
-       Type
-       ([> `B of 'a ], 'a) b as 'a
-       should be an instance of
-       (('b, [> `A of 'b ] as 'c) a as 'b, 'c) b
-|}, Principal{|
-Line _, characters 0-71:
-Error: Constraints are not satisfied in this type.
-       Type
-       ([> `B of 'a ], 'a) b as 'a
-       should be an instance of
-       (('b, [> `A of ('d, 'c) a as 'd ] as 'c) a as 'b, 'c) b
+Error: The definition of a contains a cycle:
+       [> `B of ('a, 'b) b as 'b ] as 'a
 |}];;
 
 (* PR#1917: expanding may change original in Ctype.unify2 *)
@@ -1433,3 +1424,78 @@ Line _, characters 19-22:
 Error: This expression has type M.t but an expression was expected of type 'x
        The type constructor M.t would escape its scope
 |}];;
+
+
+(* PR#6987 *)
+type 'a t = V1 of 'a
+
+type ('c,'t) pvariant = [ `V of ('c * 't t) ]
+
+class ['c] clss =
+  object
+    method mthod : 't . 'c -> 't t -> ('c, 't) pvariant = fun c x ->
+      `V (c, x)
+  end;;
+
+let f2 = fun o c x -> match x with | V1 _ -> x
+
+let rec f1 o c x =
+  match (o :> _ clss)#mthod c x with
+  | `V c -> f2 o c x;;
+[%%expect{|
+type 'a t = V1 of 'a
+type ('c, 't) pvariant = [ `V of 'c * 't t ]
+class ['c] clss : object method mthod : 'c -> 't t -> ('c, 't) pvariant end
+val f2 : 'a -> 'b -> 'c t -> 'c t = <fun>
+val f1 :
+  < mthod : 't. 'a -> 't t -> [< ('a, 't) pvariant ]; .. > ->
+  'a -> 'b t -> 'b t = <fun>
+|}]
+
+(* PR#7285 *)
+type (+'a,-'b) foo = private int;;
+let f (x : int) : ('a,'a) foo = Obj.magic x;;
+let x = f 3;;
+[%%expect{|
+type (+'a, -'b) foo = private int
+val f : int -> ('a, 'a) foo = <fun>
+val x : ('_a, '_a) foo = 3
+|}]
+
+(* PR#7344*)
+let rec f : unit -> < m: 'a. 'a -> 'a> = fun () ->
+  let x = f () in
+  ignore (x#m 1);
+  ignore (x#m "hello");
+  assert false;;
+[%%expect{|
+val f : unit -> < m : 'a. 'a -> 'a > = <fun>
+|}]
+
+(* PR#7395 *)
+type u
+type 'a t = u;;
+let c (f : u -> u) =
+ object
+   method apply: 'a. 'a t -> 'a t = fun x -> f x
+ end;;
+[%%expect{|
+type u
+type 'a t = u
+val c : (u -> u) -> < apply : 'a. 'a t -> 'a t > = <fun>
+|}]
+
+(* PR#7496 *)
+
+let f (x : < m: 'a. ([< `Foo of int & float] as 'a) -> unit>)
+         : < m: 'a. ([< `Foo of int & float] as 'a) -> unit> = x;;
+
+type t = { x : 'a. ([< `Foo of int & float ] as 'a) -> unit };;
+let f t = { x = t.x };;
+[%%expect{|
+val f :
+  < m : 'a. ([< `Foo of int & float ] as 'a) -> unit > ->
+  < m : 'b. ([< `Foo of int & float ] as 'b) -> unit > = <fun>
+type t = { x : 'a. ([< `Foo of int & float ] as 'a) -> unit; }
+val f : t -> t = <fun>
+|}]

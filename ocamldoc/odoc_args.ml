@@ -222,6 +222,8 @@ module Options = Main_args.Make_ocamldoc_options(struct
   let _no_strict_formats = unset Clflags.strict_formats
   let _thread = set Clflags.use_threads
   let _vmthread = set Clflags.use_vmthreads
+  let _unboxed_types = set Clflags.unboxed_types
+  let _no_unboxed_types = unset Clflags.unboxed_types
   let _unsafe () = assert false
   let _unsafe_string = set Clflags.unsafe_string
   let _v () = Compenv.print_version_and_library "documentation generator"
@@ -250,6 +252,8 @@ let default_options = Options.list @
        Odoc_global.files := !Odoc_global.files @ [Odoc_global.Text_file s]),
     M.option_text ;
   "-warn-error", Arg.Set Odoc_global.warn_error, M.werr ;
+  "-show-missed-crossref", Arg.Set Odoc_global.show_missed_crossref,
+  M.show_missed_crossref;
   "-hide-warnings", Arg.Clear Odoc_config.print_warnings, M.hide_warnings ;
   "-o", Arg.String (fun s -> Odoc_global.out_file := s), M.out_file ;
   "-d", Arg.String (fun s -> Odoc_global.target_dir := s), M.target_dir ;

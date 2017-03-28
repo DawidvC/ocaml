@@ -61,7 +61,8 @@ let unbox_classify_float () =
   for i = 1 to 1000 do
     assert (classify_float !x = FP_normal);
     x := !x +. 1.
-  done
+  done;
+  ignore (Sys.opaque_identity !x)
 
 let unbox_compare_float () =
   let module M = struct type sf = { mutable x: float; y: float; } end in
@@ -69,12 +70,13 @@ let unbox_compare_float () =
   for i = 1 to 1000 do
     assert (compare x.M.x x.M.y >= 0);
     x.M.x <- x.M.x +. 1.
-  done
-
+  done;
+  ignore (Sys.opaque_identity x.M.x)
 
 let unbox_float_refs () =
   let r = ref nan in
-  for i = 1 to 1000 do r := !r +. float i done
+  for i = 1 to 1000 do r := !r +. float i done;
+  ignore (Sys.opaque_identity !r)
 
 let unbox_let_float () =
   let r = ref 0. in
@@ -83,21 +85,22 @@ let unbox_let_float () =
       if i mod 2 = 0 then nan else float i
     in
     r := !r +. (y *. 2.)
-  done
+  done;
+  ignore (Sys.opaque_identity !r)
 
 type block =
   { mutable float : float;
     mutable int32 : int32 }
 
-let make_some_block float int32 =
-  { float; int32 }
+let make_some_block record =
+  { record with int32 = record.int32 }
 
-let unbox_record_1 float int32 =
+let unbox_record_1 record =
   (* There is some let lifting problem to handle that case with one
      round, this currently requires 2 rounds to be correctly
      recognized as a mutable variable pattern *)
-  (* let block = (make_some_block [@inlined]) float int32 in *)
-  let block = { float; int32 } in
+  (* let block = (make_some_block [@inlined]) record in *)
+  let block = { record with int32 = record.int32 } in
   for i = 1 to 1000 do
     let y_float =
       if i mod 2 = 0 then nan else Pervasives.float i
@@ -107,12 +110,16 @@ let unbox_record_1 float int32 =
       if i mod 2 = 0 then Int32.max_int else Int32.of_int i
     in
     block.int32 <- Int32.(add block.int32 (mul y_int32 2l))
-  done
+  done;
+  ignore (Sys.opaque_identity block.float);
+  ignore (Sys.opaque_identity block.int32)
   [@@inline never]
   (* Prevent inlining to test that the type is effectively used *)
 
+let float_int32_record = { float = 3.14; int32 = 12l }
+
 let unbox_record () =
-  unbox_record_1 3.14 12l
+  unbox_record_1 float_int32_record
 
 let r = ref 0.
 
@@ -124,7 +131,22 @@ let unbox_only_if_useful () =
     in
     r := x; (* would force boxing if the let binding above were unboxed *)
     r := x  (* use [x] twice to avoid elimination of the let-binding *)
+  done;
+  ignore (Sys.opaque_identity !r)
+
+let unbox_minor_words () =
+  for i = 1 to 1000 do
+    ignore (Gc.minor_words () = 0.)
   done
+
+let ignore_useless_args () =
+  let f x _y = int_of_float (cos x) in
+  let rec g a n x =
+    if n = 0
+    then a
+    else g (a + (f [@inlined always]) x (x +. 1.)) (n - 1) x
+  in
+  ignore (g 0 10 5.)
 
 let () =
   let flambda =
@@ -140,9 +162,13 @@ let () =
   check_noalloc "float refs" unbox_float_refs;
   check_noalloc "unbox let float" unbox_let_float;
   check_noalloc "unbox only if useful" unbox_only_if_useful;
+  check_noalloc "ignore useless args" ignore_useless_args;
 
   if flambda then begin
     check_noalloc "float and int32 record" unbox_record;
+    check_noalloc "eliminate intermediate immutable float record"
+      Float_inline.eliminate_intermediate_float_record;
   end;
 
+  check_noalloc "Gc.minor_words" unbox_minor_words;
   ()

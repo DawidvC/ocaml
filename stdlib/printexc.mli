@@ -42,13 +42,20 @@ val print_backtrace: out_channel -> unit
     on the output channel [oc].  The backtrace lists the program
     locations where the most-recently raised exception was raised
     and where it was propagated through function calls.
+
+    If the call is not inside an exception handler, the returned
+    backtrace is unspecified. If the call is after some
+    exception-catching code (before in the handler, or in a when-guard
+    during the matching of the exception handler), the backtrace may
+    correspond to a later exception than the handled one.
+
     @since 3.11.0
 *)
 
 val get_backtrace: unit -> string
 (** [Printexc.get_backtrace ()] returns a string containing the
     same exception backtrace that [Printexc.print_backtrace] would
-    print.
+    print. Same restriction usage than {!print_backtrace}.
     @since 3.11.0
 *)
 
@@ -106,7 +113,7 @@ type raw_backtrace
 val get_raw_backtrace: unit -> raw_backtrace
 (** [Printexc.get_raw_backtrace ()] returns the same exception
     backtrace that [Printexc.print_backtrace] would print, but in
-    a raw format.
+    a raw format. Same restriction usage than {!print_backtrace}.
 
     @since 4.01.0
 *)
@@ -123,6 +130,14 @@ val raw_backtrace_to_string: raw_backtrace -> string
     [Printexc.get_backtrace] uses.
 
     @since 4.01.0
+*)
+
+external raise_with_backtrace: exn -> raw_backtrace -> 'a
+  = "%raise_with_backtrace"
+(** Reraise the exception using the given raw_backtrace for the
+    origin of the exception
+
+    @since 4.05.0
 *)
 
 (** {6 Current call stack} *)
@@ -159,8 +174,8 @@ val set_uncaught_exception_handler: (exn -> raw_backtrace -> unit) -> unit
 
 (** {6 Manipulation of backtrace information}
 
-    Those function allow to traverse the slots of a raw backtrace,
-    extract information from them in a programmer-friendly format.
+    These functions are used to traverse the slots of a raw backtrace
+    and extract information from them in a programmer-friendly format.
 *)
 
 type backtrace_slot
@@ -200,6 +215,7 @@ type location = {
     @since 4.02
 *)
 
+(** @since 4.02.0 *)
 module Slot : sig
   type t = backtrace_slot
 
@@ -209,6 +225,14 @@ module Slot : sig
       function call.
 
       @since 4.02
+  *)
+
+  val is_inline : t -> bool
+  (** [is_inline slot] is [true] when [slot] refers to a call
+      that got inlined by the compiler, and [false] when it comes from
+      any other context.
+
+      @since 4.04.0
   *)
 
   val location : t -> location option
@@ -276,6 +300,29 @@ val convert_raw_backtrace_slot : raw_backtrace_slot -> backtrace_slot
     @since 4.02
 *)
 
+
+val get_raw_backtrace_next_slot :
+    raw_backtrace_slot -> raw_backtrace_slot option
+(** [get_raw_backtrace_next_slot slot] returns the next slot inlined, if any.
+
+    Sample code to iterate over all frames (inlined and non-inlined):
+    {[
+      (* Iterate over inlined frames *)
+      let rec iter_raw_backtrace_slot f slot =
+        f slot;
+        match get_raw_backtrace_next_slot slot with
+        | None -> ()
+        | Some slot' -> iter_raw_backtrace_slot f slot'
+
+      (* Iterate over stack frames *)
+      let iter_raw_backtrace f bt =
+        for i = 0 to raw_backtrace_length bt - 1 do
+          iter_raw_backtrace_slot f (get_raw_backtrace_slot bt i)
+        done
+    ]}
+
+    @since 4.04.0
+*)
 
 (** {6 Exception slots} *)
 

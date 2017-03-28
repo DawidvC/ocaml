@@ -49,3 +49,9 @@ skeleton.$(O): defs.h
 symtab.$(O): defs.h
 verbose.$(O): defs.h
 warshall.$(O): defs.h
+
+# The following rule is similar to make's default one, except that it
+# also works for .obj files.
+
+%.$(O): %.c
+	$(CC) $(CFLAGS) -c $<

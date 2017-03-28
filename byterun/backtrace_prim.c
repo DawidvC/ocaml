@@ -13,6 +13,8 @@
 /*                                                                        */
 /**************************************************************************/
 
+#define CAML_INTERNALS
+
 /* Stack backtrace for uncaught exceptions */
 
 #include <fcntl.h>
@@ -107,7 +109,7 @@ static int cmp_ev_info(const void *a, const void *b)
   return 0;
 }
 
-struct ev_info *process_debug_events(code_t code_start, value events_heap,
+static struct ev_info *process_debug_events(code_t code_start, value events_heap,
                                      mlsize_t *num_events)
 {
   CAMLparam1(events_heap);
@@ -124,7 +126,7 @@ struct ev_info *process_debug_events(code_t code_start, value events_heap,
   if (*num_events == 0)
       CAMLreturnT(struct ev_info *, NULL);
 
-  events = malloc(*num_events * sizeof(struct ev_info));
+  events = caml_stat_alloc_noexc(*num_events * sizeof(struct ev_info));
   if(events == NULL)
     caml_fatal_error ("caml_add_debug_info: out of memory");
 
@@ -140,7 +142,7 @@ struct ev_info *process_debug_events(code_t code_start, value events_heap,
 
       {
         uintnat fnsz = caml_string_length(Field(ev_start, POS_FNAME)) + 1;
-        events[j].ev_filename = (char*)malloc(fnsz);
+        events[j].ev_filename = (char*)caml_stat_alloc_noexc(fnsz);
         if(events[j].ev_filename == NULL)
           caml_fatal_error ("caml_add_debug_info: out of memory");
         memcpy(events[j].ev_filename,
@@ -160,7 +162,7 @@ struct ev_info *process_debug_events(code_t code_start, value events_heap,
     }
   }
 
-  Assert(j == *num_events);
+  CAMLassert(j == *num_events);
 
   qsort(events, *num_events, sizeof(struct ev_info), cmp_ev_info);
 
@@ -215,6 +217,14 @@ CAMLprim value caml_remove_debug_info(code_t start)
   CAMLreturn(Val_unit);
 }
 
+int caml_alloc_backtrace_buffer(void){
+  CAMLassert(caml_backtrace_pos == 0);
+  caml_backtrace_buffer =
+    caml_stat_alloc_noexc(BACKTRACE_BUFFER_SIZE * sizeof(code_t));
+  if (caml_backtrace_buffer == NULL) return -1;
+  return 0;
+}
+
 /* Store the return addresses contained in the given stack fragment
    into the backtrace array */
 
@@ -226,11 +236,8 @@ void caml_stash_backtrace(value exn, code_t pc, value * sp, int reraise)
     caml_backtrace_last_exn = exn;
   }
 
-  if (caml_backtrace_buffer == NULL) {
-    Assert(caml_backtrace_pos == 0);
-    caml_backtrace_buffer = malloc(BACKTRACE_BUFFER_SIZE * sizeof(code_t));
-    if (caml_backtrace_buffer == NULL) return;
-  }
+  if (caml_backtrace_buffer == NULL && caml_alloc_backtrace_buffer() == -1)
+    return;
 
   if (caml_backtrace_pos >= BACKTRACE_BUFFER_SIZE) return;
   /* testing the code region is needed: PR#1554 */
@@ -245,24 +252,6 @@ void caml_stash_backtrace(value exn, code_t pc, value * sp, int reraise)
     if (find_debug_info(p) != NULL)
       caml_backtrace_buffer[caml_backtrace_pos++] = p;
   }
-}
-
-/* In order to prevent the GC from walking through the debug
-   information (which have no headers), we transform code pointers to
-   31/63 bits ocaml integers by shifting them by 1 to the right. We do
-   not lose information as code pointers are aligned.
-
-   In particular, we do not need to use [caml_modify] when setting
-   an array element with such a value.
-*/
-value caml_val_raw_backtrace_slot(backtrace_slot pc)
-{
-  return Val_long ((uintnat)pc >> 1);
-}
-
-backtrace_slot caml_raw_backtrace_slot_val(value v)
-{
-  return ((backtrace_slot)(Long_val(v) << 1));
 }
 
 /* returns the next frame pointer (or NULL if none is available);
@@ -322,8 +311,8 @@ CAMLprim value caml_get_current_callstack(value max_frames_value)
 
     for (trace_pos = 0; trace_pos < trace_size; trace_pos++) {
       code_t p = caml_next_frame_pointer(&sp, &trsp);
-      Assert(p != NULL);
-      Store_field(trace, trace_pos, caml_val_raw_backtrace_slot(p));
+      CAMLassert(p != NULL);
+      Field(trace, trace_pos) = Val_backtrace_slot(p);
     }
   }
 
@@ -336,7 +325,7 @@ CAMLprim value caml_get_current_callstack(value max_frames_value)
 #define O_BINARY 0
 #endif
 
-void read_main_debug_info(struct debug_info *di)
+static void read_main_debug_info(struct debug_info *di)
 {
   CAMLparam0();
   CAMLlocal3(events, evl, l);
@@ -345,7 +334,7 @@ void read_main_debug_info(struct debug_info *di)
   struct channel *chan;
   struct exec_trailer trail;
 
-  Assert(di->already_read == 0);
+  CAMLassert(di->already_read == 0);
   di->already_read = 1;
 
   if (caml_cds_file != NULL) {
@@ -436,10 +425,10 @@ static struct ev_info *event_for_location(code_t pc)
 
 /* Extract location information for the given PC */
 
-void caml_extract_location_info(backtrace_slot slot,
-                                /*out*/ struct caml_loc_info * li)
+void caml_debuginfo_location(debuginfo dbg,
+                             /*out*/ struct caml_loc_info * li)
 {
-  code_t pc = slot;
+  code_t pc = dbg;
   struct ev_info *event = event_for_location(pc);
   li->loc_is_raise =
     caml_is_instruction(*pc, RAISE) ||
@@ -449,8 +438,20 @@ void caml_extract_location_info(backtrace_slot slot,
     return;
   }
   li->loc_valid = 1;
+  li->loc_is_inlined = 0;
   li->loc_filename = event->ev_filename;
   li->loc_lnum = event->ev_lnum;
   li->loc_startchr = event->ev_startchr;
   li->loc_endchr = event->ev_endchr;
+}
+
+debuginfo caml_debuginfo_extract(backtrace_slot slot)
+{
+  return (debuginfo)slot;
+}
+
+debuginfo caml_debuginfo_next(debuginfo dbg)
+{
+  /* No inlining in bytecode */
+  return NULL;
 }

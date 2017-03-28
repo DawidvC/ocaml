@@ -13,10 +13,27 @@
 #*                                                                        *
 #**************************************************************************
 
-include Makefile.shared
+LIBNAME=bigarray
+EXTRACFLAGS=-I../$(UNIXLIB) -DIN_OCAML_BIGARRAY
+EXTRACAMLFLAGS=-I ../$(UNIXLIB)
+COBJS=bigarray_stubs.$(O) mmap_ba.$(O) mmap.$(O)
+CAMLOBJS=bigarray.cmo
+
+include ../Makefile
+
+mmap.$(O): ../$(UNIXLIB)/mmap.c
+	$(BYTECC) $(BYTECCCOMPOPTS) $(CFLAGS) -c $<
+mmap_ba.$(O): ../unix/mmap_ba.c
+	$(BYTECC) $(BYTECCCOMPOPTS) $(CFLAGS) -c $<
+
+.PHONY: depend
 
 depend:
-	$(CC) -MM $(CFLAGS) *.c > .depend
-	$(CAMLRUN) ../../tools/ocamldep -slash *.mli *.ml >> .depend
+ifeq "$(TOOLCHAIN)" "msvc"
+	$(error Dependencies cannot be regenerated using the MSVC ports)
+else
+	$(CC) -MM $(CFLAGS) *.c | sed -e 's/\.o/.$$(O)/g' > .depend
+	$(CAMLRUN) $(ROOTDIR)/tools/ocamldep -slash *.mli *.ml >> .depend
+endif
 
 include .depend

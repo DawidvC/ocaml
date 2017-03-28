@@ -157,6 +157,13 @@ module Analyser :
           Odoc_env.env -> (string * Odoc_types.info option) list ->
             Types.type_kind -> Odoc_type.type_kind
 
+      (** This function converts a [Types.constructor_arguments] into a
+          [Odoc_type.constructor_args], by associating the comment found
+          in the parsetree of each inner record field, if any.*)
+      val get_cstr_args:
+        Odoc_env.env -> int -> Typedtree.constructor_arguments ->
+        Odoc_type.constructor_args
+
       (** This function merge two optional info structures. *)
       val merge_infos :
           Odoc_types.info option -> Odoc_types.info option ->
@@ -174,7 +181,7 @@ module Analyser :
         Odoc_name.t -> int -> Parsetree.class_type -> Types.class_type ->
           Odoc_class.class_type_kind
 
-      (** This function takes an interface file name, a file containg the code, a parse tree
+      (** This function takes an interface file name, a file containing the code, a parse tree
          and the signature obtained from the compiler.
          It goes through the parse tree, creating values for encountered
          functions, modules, ..., looking in the source file for comments,

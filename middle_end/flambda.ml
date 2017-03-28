@@ -116,7 +116,7 @@ and function_declarations = {
 }
 
 and function_declaration = {
-  params : Variable.t list;
+  params : Parameter.t list;
   body : t;
   free_variables : Variable.Set.t;
   free_symbols : Symbol.Set.t;
@@ -189,7 +189,7 @@ let rec lam ppf (flam : t) =
   match flam with
   | Var (id) ->
       Variable.print ppf id
-  | Apply({func; args; kind; inline}) ->
+  | Apply({func; args; kind; inline; dbg}) ->
     let direct ppf () =
       match kind with
       | Indirect -> ()
@@ -202,7 +202,8 @@ let rec lam ppf (flam : t) =
       | Unroll i -> fprintf ppf "<unroll %i>" i
       | Default_inline -> ()
     in
-    fprintf ppf "@[<2>(apply%a%a@ %a%a)@]" direct () inline ()
+    fprintf ppf "@[<2>(apply%a%a<%s>@ %a%a)@]" direct () inline ()
+      (Debuginfo.to_string dbg)
       Variable.print func Variable.print_list args
   | Assign { being_assigned; new_value; } ->
     fprintf ppf "@[<2>(assign@ %a@ %a)@]"
@@ -343,16 +344,20 @@ and print_named ppf (named : named) =
     print_move_within_set_of_closures ppf move_within_set_of_closures
   | Set_of_closures (set_of_closures) ->
     print_set_of_closures ppf set_of_closures
-  | Prim(prim, args, _) ->
-    fprintf ppf "@[<2>(%a%a)@]" Printlambda.primitive prim
+  | Prim(prim, args, dbg) ->
+    fprintf ppf "@[<2>(%a<%s>%a)@]" Printlambda.primitive prim
+      (Debuginfo.to_string dbg)
       Variable.print_list args
   | Expr expr ->
     fprintf ppf "*%a" lam expr
     (* lam ppf expr *)
 
 and print_function_declaration ppf var (f : function_declaration) =
-  let idents ppf =
-    List.iter (fprintf ppf "@ %a" Variable.print) in
+  let param ppf p =
+    Variable.print ppf (Parameter.var p)
+  in
+  let params ppf =
+    List.iter (fprintf ppf "@ %a" param) in
   let stub =
     if f.stub then
       " *stub*"
@@ -380,7 +385,7 @@ and print_function_declaration ppf var (f : function_declaration) =
   in
   fprintf ppf "@[<2>(%a%s%s%s%s@ =@ fun@[<2>%a@] ->@ @[<2>%a@])@]@ "
     Variable.print var stub is_a_functor inline specialise
-    idents f.params lam f.body
+    params f.params lam f.body
 
 and print_set_of_closures ppf (set_of_closures : set_of_closures) =
   match set_of_closures with
@@ -492,7 +497,7 @@ let rec print_program_body ppf (program : program_body) =
       (Format.pp_print_list lam) fields;
     print_program_body ppf program
   | Effect (expr, program) ->
-    fprintf ppf "@[effect @[<hv 1>%a@]@@]@."
+    fprintf ppf "@[effect @[<hv 1>%a@]@]@."
       lam expr;
     print_program_body ppf program;
   | End root -> fprintf ppf "End %a" Symbol.print root
@@ -1034,6 +1039,15 @@ let update_function_declarations function_decls ~funs =
     funs;
   }
 
+let import_function_declarations_for_pack function_decls
+    import_set_of_closures_id import_set_of_closures_origin =
+  { set_of_closures_id =
+      import_set_of_closures_id function_decls.set_of_closures_id;
+    set_of_closures_origin =
+      import_set_of_closures_origin function_decls.set_of_closures_origin;
+    funs = function_decls.funs;
+  }
+
 let create_set_of_closures ~function_decls ~free_vars ~specialised_args
       ~direct_call_surrogates =
   if !Clflags.flambda_invariant_checks then begin
@@ -1042,7 +1056,7 @@ let create_set_of_closures ~function_decls ~free_vars ~specialised_args
       Variable.Map.fold (fun _fun_var function_decl expected_free_vars ->
           let free_vars =
             Variable.Set.diff function_decl.free_variables
-              (Variable.Set.union (Variable.Set.of_list function_decl.params)
+              (Variable.Set.union (Parameter.Set.vars function_decl.params)
                 all_fun_vars)
           in
           Variable.Set.union free_vars expected_free_vars)
@@ -1075,7 +1089,7 @@ let create_set_of_closures ~function_decls ~free_vars ~specialised_args
     end;
     let all_params =
       Variable.Map.fold (fun _fun_var function_decl all_params ->
-          Variable.Set.union (Variable.Set.of_list function_decl.params)
+          Variable.Set.union (Parameter.Set.vars function_decl.params)
             all_params)
         function_decls.funs
         Variable.Set.empty
@@ -1100,7 +1114,7 @@ let create_set_of_closures ~function_decls ~free_vars ~specialised_args
 let used_params function_decl =
   Variable.Set.filter
     (fun param -> Variable.Set.mem param function_decl.free_variables)
-    (Variable.Set.of_list function_decl.params)
+    (Parameter.Set.vars function_decl.params)
 
 let compare_const (c1:const) (c2:const) =
   match c1, c2 with

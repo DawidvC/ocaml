@@ -13,6 +13,8 @@
 /*                                                                        */
 /**************************************************************************/
 
+#define CAML_INTERNALS
+
 /* The interface of this file is in "caml/mlvalues.h" and "caml/alloc.h" */
 
 #include <math.h>
@@ -46,7 +48,7 @@ CAMLexport double caml_Double_val(value val)
 {
   union { value v[2]; double d; } buffer;
 
-  Assert(sizeof(double) == 2 * sizeof(value));
+  CAMLassert(sizeof(double) == 2 * sizeof(value));
   buffer.v[0] = Field(val, 0);
   buffer.v[1] = Field(val, 1);
   return buffer.d;
@@ -56,7 +58,7 @@ CAMLexport void caml_Store_double_val(value val, double dbl)
 {
   union { value v[2]; double d; } buffer;
 
-  Assert(sizeof(double) == 2 * sizeof(value));
+  CAMLassert(sizeof(double) == 2 * sizeof(value));
   buffer.d = dbl;
   Field(val, 0) = buffer.v[0];
   Field(val, 1) = buffer.v[1];
@@ -241,6 +243,7 @@ static int caml_float_of_hex(const char * s, double * res)
     }
     }
   }
+  if (n_bits == 0) return -1;
   /* Convert mantissa to FP.  We use a signed conversion because we can
      (m has 60 bits at most) and because it is faster
      on several architectures. */

@@ -13,8 +13,6 @@
 (*                                                                        *)
 (**************************************************************************)
 
-open Format
-
 type t =
   | Comment_start                           (*  1 *)
   | Comment_not_end                         (*  2 *)
@@ -75,6 +73,9 @@ type t =
   | Ambiguous_pattern of string list        (* 57 *)
   | No_cmx_file of string                   (* 58 *)
   | Assignment_to_non_mutable_value         (* 59 *)
+  | Unused_module of string                 (* 60 *)
+  | Unboxable_type_in_prim_decl of string   (* 61 *)
+  | Constraint_on_gadt                      (* 62 *)
 ;;
 
 val parse_options : bool -> string -> unit;;
@@ -85,9 +86,15 @@ val is_error : t -> bool;;
 val defaults_w : string;;
 val defaults_warn_error : string;;
 
-val print : formatter -> t -> unit;;
+type reporting_information =
+  { number : int
+  ; message : string
+  ; is_error : bool
+  }
 
-exception Errors of int;;
+val report : t -> [ `Active of reporting_information | `Inactive ]
+
+exception Errors;;
 
 val check_fatal : unit -> unit;;
 val reset_fatal: unit -> unit

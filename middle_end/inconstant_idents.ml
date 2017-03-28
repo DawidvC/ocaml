@@ -49,7 +49,7 @@
 
 (* CR-someday lwhite: I think this pass could be combined with
    alias_analysis and other parts of lift_constants into a single
-   type-based anaylsis which infers a "type" for each variable that is
+   type-based analysis which infers a "type" for each variable that is
    either an allocated_constant expression or "not constant".  Recursion
    would be handled with unification variables. *)
 
@@ -216,7 +216,7 @@ module Inconstants (P:Param) (Backend:Backend_intf.S) = struct
 
   (* First loop: iterates on the tree to mark dependencies.
 
-     curr is the variables or closures to wich we add constraints like
+     curr is the variables or closures to which we add constraints like
      '... in NC => curr in NC' or 'curr in NC'
 
      It can be empty when no constraint can be added like in the toplevel
@@ -336,7 +336,8 @@ module Inconstants (P:Param) (Backend:Backend_intf.S) = struct
        makeblock(Mutable) can be a 'constant' if it is allocated at
        toplevel: if this expression is evaluated only once.
     *)
-    | Prim (Lambda.Pmakeblock (_tag, Asttypes.Immutable, _value_kind), args, _dbg) ->
+    | Prim (Lambda.Pmakeblock (_tag, Asttypes.Immutable, _value_kind), args,
+            _dbg) ->
       mark_vars args curr
 (*  (* CR-someday pchambart: If global mutables are allowed: *)
     | Prim(Lambda.Pmakeblock(_tag, Asttypes.Mutable), args, _dbg, _)
@@ -346,6 +347,14 @@ module Inconstants (P:Param) (Backend:Backend_intf.S) = struct
     | Prim (Pmakearray (Pfloatarray, Immutable), args, _) ->
       mark_vars args curr
     | Prim (Pmakearray (Pfloatarray, Mutable), args, _) ->
+      (* CR-someday pchambart: Toplevel float arrays could always be
+         statically allocated using an equivalent of the
+         Initialize_symbol construction.
+         Toplevel non-float arrays could also be turned into an
+         Initialize_symbol, but only when declared as immutable since
+         preallocated symbols does not allow mutation after
+         initialisation
+      *)
       if toplevel then mark_vars args curr
       else mark_curr curr
     | Prim (Pduparray (Pfloatarray, Immutable), [arg], _) ->
@@ -430,7 +439,7 @@ module Inconstants (P:Param) (Backend:Backend_intf.S) = struct
             | outer_var ->
               register_implication ~in_nc:(Var outer_var.var)
                 ~implies_in_nc:[Var param])
-          ffunc.params;
+          (Parameter.List.vars ffunc.params);
         mark_loop ~toplevel:false [] ffunc.body)
       function_decls.funs
 

@@ -39,6 +39,8 @@ module type Common_options = sig
   val _no_strict_sequence : unit -> unit
   val _strict_formats : unit -> unit
   val _no_strict_formats : unit -> unit
+  val _unboxed_types : unit -> unit
+  val _no_unboxed_types : unit -> unit
   val _unsafe : unit -> unit
   val _unsafe_string : unit -> unit
   val _version : unit -> unit
@@ -82,6 +84,7 @@ module type Compiler_options = sig
   val _output_obj : unit -> unit
   val _output_complete_obj : unit -> unit
   val _pack : unit -> unit
+  val _plugin : string -> unit
   val _pp : string -> unit
   val _principal : unit -> unit
   val _no_principal : unit -> unit
@@ -97,6 +100,9 @@ module type Compiler_options = sig
 
   val _nopervasives : unit -> unit
   val _dtimings : unit -> unit
+
+  val _args: string -> string array
+  val _args0: string -> string array
 end
 ;;
 
@@ -107,7 +113,11 @@ module type Toplevel_options = sig
   val _no_version : unit -> unit
   val _noprompt : unit -> unit
   val _nopromptcont : unit -> unit
+  val _plugin : string -> unit
   val _stdin : unit -> unit
+  val _args: string -> string array
+  val _args0: string -> string array
+
 end
 ;;
 
@@ -186,17 +196,22 @@ module type Optcomp_options = sig
   include Common_options
   include Compiler_options
   include Optcommon_options
+  val _linscan : unit -> unit
   val _no_float_const_prop : unit -> unit
   val _nodynlink : unit -> unit
   val _p : unit -> unit
   val _pp : string -> unit
   val _S : unit -> unit
   val _shared : unit -> unit
+  val _afl_instrument : unit -> unit
+  val _afl_inst_ratio : int -> unit
+  val _dinterval : unit -> unit
 end;;
 
 module type Opttop_options = sig
   include Toplevel_options
   include Optcommon_options
+  val _verbose : unit -> unit
   val _S : unit -> unit
 end;;
 

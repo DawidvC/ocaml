@@ -30,6 +30,7 @@ char rflag;
 char tflag;
 char vflag;
 char qflag;
+char eflag;
 char sflag;
 char big_endian;
 
@@ -37,7 +38,7 @@ char *file_prefix = 0;
 char *myname = "yacc";
 char temp_form[] = "yacc.XXXXXXX";
 
-#ifdef NO_UNIX
+#ifdef _WIN32
 char dirsep = '\\';
 #else
 char dirsep = '/';
@@ -103,7 +104,7 @@ char *nullable;
 #if !defined(HAS_MKSTEMP)
 extern char *mktemp(char *);
 #endif
-#ifndef NO_UNIX
+#ifdef _WIN32
 extern char *getenv(const char *);
 #endif
 
@@ -160,7 +161,7 @@ void set_signals(void)
 
 void usage(void)
 {
-    fprintf(stderr, "usage: %s [-v] [-q] [-b file_prefix] filename\n",
+    fprintf(stderr, "usage: %s [-v] [--strict] [-q] [-b file_prefix] filename\n",
             myname);
     exit(1);
 }
@@ -184,6 +185,10 @@ void getargs(int argc, char **argv)
             return;
 
         case '-':
+            if (!strcmp (argv[i], "--strict")){
+              eflag = 1;
+              goto end_of_option;
+            }
             ++i;
             goto no_more_options;
 
@@ -279,7 +284,7 @@ void create_file_names(void)
     int i, len;
     char *tmpdir;
 
-#ifdef NO_UNIX
+#ifdef _WIN32
     tmpdir = getenv("TEMP");
     if (tmpdir == 0) tmpdir = ".";
 #else
@@ -457,6 +462,7 @@ int main(int argc, char **argv)
     lalr();
     make_parser();
     verbose();
+    if (eflag && SRtotal + RRtotal > 0) forbidden_conflicts();
     output();
     done(0);
     /*NOTREACHED*/

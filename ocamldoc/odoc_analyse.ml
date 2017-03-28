@@ -18,8 +18,6 @@
 
 let print_DEBUG s = print_string s ; print_newline ()
 
-open Config
-open Misc
 open Format
 open Typedtree
 
@@ -29,7 +27,7 @@ open Typedtree
    then the directories specified with the -I option (in command-line order),
    then the standard library directory. *)
 let init_path () =
-  load_path :=
+  Config.load_path :=
     "" :: List.rev (Config.standard_library :: !Clflags.include_dirs);
   Env.reset_cache ()
 
@@ -39,11 +37,20 @@ let initial_env () =
     if !Clflags.unsafe_string then Env.initial_unsafe_string
     else Env.initial_safe_string
   in
-  try
-    if !Clflags.nopervasives then initial else
-    Env.open_pers_signature "Pervasives" initial
-  with Not_found ->
-    fatal_error "cannot open pervasives.cmi"
+  let open_mod env m =
+    let open Asttypes in
+    let lid = {loc = Location.in_file "ocamldoc command line";
+               txt = Longident.parse m } in
+    snd (Typemod.type_open_ Override env lid.loc lid) in
+  (* Open the list of modules given as arguments of the "-open" flag
+     The list is reversed to open the modules in the left-to-right order *)
+  let to_open = List.rev !Clflags.open_modules in
+  let to_open =
+    if Env.get_unit_name () = "Pervasives"
+    then to_open
+    else "Pervasives" :: to_open
+  in
+  List.fold_left open_mod initial to_open
 
 (** Optionally preprocess a source file *)
 let preprocess sourcefile =
@@ -76,7 +83,7 @@ let process_implementation_file sourcefile =
   try
     let parsetree =
       Pparse.file ~tool_name Format.err_formatter inputfile
-        (no_docstring Parse.implementation) ast_impl_magic_number
+        (no_docstring Parse.implementation) Pparse.Structure
     in
     let typedtree =
       Typemod.type_implementation
@@ -107,9 +114,9 @@ let process_interface_file sourcefile =
   let inputfile = preprocess sourcefile in
   let ast =
     Pparse.file ~tool_name Format.err_formatter inputfile
-      (no_docstring Parse.interface) ast_intf_magic_number
+      (no_docstring Parse.interface) Pparse.Signature
   in
-  let sg = Typemod.type_interface (initial_env()) ast in
+  let sg = Typemod.type_interface sourcefile (initial_env()) ast in
   Warnings.check_fatal ();
   (ast, sg, inputfile)
 
@@ -122,13 +129,11 @@ module Sig_analyser = Odoc_sig.Analyser (Odoc_comments.Basic_info_retriever)
 (** Handle an error. *)
 
 let process_error exn =
-  match Location.error_of_exn exn with
-  | Some err ->
-      fprintf Format.err_formatter "@[%a@]@." Location.report_error err
-  | None ->
-      fprintf Format.err_formatter
-        "Compilation error(%s). Use the OCaml compiler to get more details.@."
-        (Printexc.to_string exn)
+  try Location.report_exception Format.err_formatter exn
+  with exn ->
+    fprintf Format.err_formatter
+      "Compilation error(%s). Use the OCaml compiler to get more details.@."
+      (Printexc.to_string exn)
 
 (** Process the given file, according to its extension. Return the Module.t created, if any.*)
 let process_file sourcefile =
@@ -153,7 +158,7 @@ let process_file sourcefile =
              None
          | Some (parsetree, typedtree) ->
              let file_module = Ast_analyser.analyse_typed_tree file
-                 !Location.input_name parsetree typedtree
+                 input_file parsetree typedtree
              in
              file_module.Odoc_module.m_top_deps <- Odoc_dep.impl_dependencies parsetree ;
 
@@ -181,7 +186,7 @@ let process_file sourcefile =
        try
          let (ast, signat, input_file) = process_interface_file file in
          let file_module = Sig_analyser.analyse_signature file
-             !Location.input_name ast signat.sig_type
+             input_file ast signat.sig_type
          in
 
          file_module.Odoc_module.m_top_deps <- Odoc_dep.intf_dependencies ast ;
@@ -219,15 +224,16 @@ let process_file sourcefile =
           with Odoc_text.Text_syntax (l, c, s) ->
             raise (Failure (Odoc_messages.text_parse_error l c s))
         in
+         let m_info =
+          Some Odoc_types.{dummy_info with i_desc= Some txt } in
         let m =
           {
             Odoc_module.m_name = mod_name ;
             Odoc_module.m_type = Types.Mty_signature [] ;
-            Odoc_module.m_info = None ;
+            Odoc_module.m_info;
             Odoc_module.m_is_interface = true ;
             Odoc_module.m_file = file ;
-            Odoc_module.m_kind = Odoc_module.Module_struct
-              [Odoc_module.Element_module_comment txt] ;
+            Odoc_module.m_kind = Odoc_module.Module_struct [] ;
             Odoc_module.m_loc =
               { Odoc_types.loc_impl = None ;
                 Odoc_types.loc_inter = Some (Location.in_file file) } ;

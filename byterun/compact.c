@@ -13,6 +13,8 @@
 /*                                                                        */
 /**************************************************************************/
 
+#define CAML_INTERNALS
+
 #include <string.h>
 
 #include "caml/address_class.h"
@@ -26,6 +28,7 @@
 #include "caml/mlvalues.h"
 #include "caml/roots.h"
 #include "caml/weak.h"
+#include "caml/compact.h"
 
 extern uintnat caml_percent_free;                   /* major_gc.c */
 extern void caml_shrink_heap (char *);              /* memory.c */
@@ -46,10 +49,16 @@ extern void caml_shrink_heap (char *);              /* memory.c */
   XXX (see [caml_register_global_roots])
   XXX Should be able to fix it to only assume 2-byte alignment.
 */
-#define Make_ehd(s,t,c) (((s) << 10) | (t) << 2 | (c))
+#ifdef WITH_PROFINFO
+#define Make_ehd(s,t,c,p) \
+  (((s) << 10) | (t) << 2 | (c) | ((p) << PROFINFO_SHIFT))
+#else
+#define Make_ehd(s,t,c,p) (((s) << 10) | (t) << 2 | (c))
+#endif
 #define Whsize_ehd(h) Whsize_hd (h)
 #define Wosize_ehd(h) Wosize_hd (h)
 #define Tag_ehd(h) (((h) >> 2) & 0xFF)
+#define Profinfo_ehd(hd) Profinfo_hd(hd)
 #define Ecolor(w) ((w) & 3)
 
 typedef uintnat word;
@@ -57,7 +66,7 @@ typedef uintnat word;
 static void invert_pointer_at (word *p)
 {
   word q = *p;
-                                            Assert (Ecolor ((intnat) p) == 0);
+                                            CAMLassert (Ecolor ((intnat) p) == 0);
 
   /* Use Ecolor (q) == 0 instead of Is_block (q) because q could be an
      inverted pointer for an infix header (with Ecolor == 2). */
@@ -79,7 +88,7 @@ static void invert_pointer_at (word *p)
         word *hp = (word *) Hp_val (val);
 
         while (Ecolor (*hp) == 0) hp = (word *) *hp;
-                                                   Assert (Ecolor (*hp) == 3);
+                                                   CAMLassert (Ecolor (*hp) == 3);
         if (Tag_ehd (*hp) == Closure_tag){
           /* This is the first infix found in this block. */
           /* Save original header. */
@@ -88,15 +97,15 @@ static void invert_pointer_at (word *p)
           Hd_val (q) = (header_t) ((word) p | 2);
           /* Change block header's tag to Infix_tag, and change its size
              to point to the infix list. */
-          *hp = Make_ehd (Wosize_bhsize (q - val), Infix_tag, 3);
-        }else{                            Assert (Tag_ehd (*hp) == Infix_tag);
+          *hp = Make_ehd (Wosize_bhsize (q - val), Infix_tag, 3, (uintnat) 0);
+        }else{                            CAMLassert (Tag_ehd (*hp) == Infix_tag);
           /* Point the last of this infix list to the current first infix
              list of the block. */
           *p = (word) &Field (val, Wosize_ehd (*hp)) | 1;
           /* Point the head of this infix list to the above. */
           Hd_val (q) = (header_t) ((word) p | 2);
           /* Change block header's size to point to this infix list. */
-          *hp = Make_ehd (Wosize_bhsize (q - val), Infix_tag, 3);
+          *hp = Make_ehd (Wosize_bhsize (q - val), Infix_tag, 3, (uintnat) 0);
         }
       }
       break;
@@ -108,7 +117,7 @@ static void invert_pointer_at (word *p)
   }
 }
 
-static void invert_root (value v, value *p)
+void caml_invert_root (value v, value *p)
 {
   invert_pointer_at ((word *) p);
 }
@@ -138,7 +147,7 @@ static char *compact_allocate (mlsize_t size)
   }
   chunk = compact_fl;
   while (Chunk_size (chunk) - Chunk_alloc (chunk) < size){
-    chunk = Chunk_next (chunk);                         Assert (chunk != NULL);
+    chunk = Chunk_next (chunk);                         CAMLassert (chunk != NULL);
   }
   adr = chunk + Chunk_alloc (chunk);
   Chunk_alloc (chunk) += size;
@@ -148,7 +157,7 @@ static char *compact_allocate (mlsize_t size)
 static void do_compaction (void)
 {
   char *ch, *chend;
-                                          Assert (caml_gc_phase == Phase_idle);
+                                          CAMLassert (caml_gc_phase == Phase_idle);
   caml_gc_message (0x10, "Compacting heap...\n", 0);
 
 #ifdef DEBUG
@@ -168,10 +177,10 @@ static void do_compaction (void)
 
         if (Is_blue_hd (hd)){
           /* Free object.  Give it a string tag. */
-          Hd_hp (p) = Make_ehd (sz, String_tag, 3);
-        }else{                                      Assert (Is_white_hd (hd));
+          Hd_hp (p) = Make_ehd (sz, String_tag, 3, (uintnat) 0);
+        }else{                                      CAMLassert (Is_white_hd (hd));
           /* Live object.  Keep its tag. */
-          Hd_hp (p) = Make_ehd (sz, Tag_hd (hd), 3);
+          Hd_hp (p) = Make_ehd (sz, Tag_hd (hd), 3, Profinfo_hd (hd));
         }
         p += Whsize_wosize (sz);
       }
@@ -187,8 +196,9 @@ static void do_compaction (void)
     /* Invert roots first because the threads library needs some heap
        data structures to find its roots.  Fortunately, it doesn't need
        the headers (see above). */
-    caml_do_roots (invert_root, 1);
-    caml_final_do_weak_roots (invert_root);
+    caml_do_roots (caml_invert_root, 1);
+    /* The values to be finalised are not roots but should still be inverted */
+    caml_final_invert_finalisable_values ();
 
     ch = caml_heap_start;
     while (ch != NULL){
@@ -263,16 +273,21 @@ static void do_compaction (void)
           size_t sz;
           tag_t t;
           char *newadr;
+#ifdef WITH_PROFINFO
+          uintnat profinfo;
+#endif
           word *infixes = NULL;
 
           while (Ecolor (q) == 0) q = * (word *) q;
           sz = Whsize_ehd (q);
           t = Tag_ehd (q);
-
+#ifdef WITH_PROFINFO
+          profinfo = Profinfo_ehd (q);
+#endif
           if (t == Infix_tag){
             /* Get the original header of this block. */
             infixes = p + sz;
-            q = *infixes;                             Assert (Ecolor (q) == 2);
+            q = *infixes;                             CAMLassert (Ecolor (q) == 2);
             while (Ecolor (q) != 3) q = * (word *) (q & ~(uintnat)3);
             sz = Whsize_ehd (q);
             t = Tag_ehd (q);
@@ -285,7 +300,8 @@ static void do_compaction (void)
             * (word *) q = (word) Val_hp (newadr);
             q = next;
           }
-          *p = Make_header (Wosize_whsize (sz), t, Caml_white);
+          *p = Make_header_with_profinfo (Wosize_whsize (sz), t, Caml_white,
+            profinfo);
 
           if (infixes != NULL){
             /* Rebuild the infix headers and revert the infix pointers. */
@@ -298,15 +314,18 @@ static void do_compaction (void)
                 next = * (word *) q;
                 * (word *) q = (word) Val_hp ((word *) newadr + (infixes - p));
                 q = next;
-              }                    Assert (Ecolor (q) == 1 || Ecolor (q) == 3);
+              }                    CAMLassert (Ecolor (q) == 1 || Ecolor (q) == 3);
+              /* No need to preserve any profinfo value on the [Infix_tag]
+                 headers; the Spacetime profiling heap snapshot code doesn't
+                 look at them. */
               *infixes = Make_header (infixes - p, Infix_tag, Caml_white);
               infixes = (word *) q;
             }
           }
           p += sz;
-        }else{                                        Assert (Ecolor (q) == 3);
+        }else{                                        CAMLassert (Ecolor (q) == 3);
           /* This is guaranteed only if caml_compact_heap was called after a
-             nonincremental major GC:       Assert (Tag_ehd (q) == String_tag);
+             nonincremental major GC:       CAMLassert (Tag_ehd (q) == String_tag);
           */
           /* No pointers to the header and no infix header:
              the object was free. */
@@ -336,7 +355,7 @@ static void do_compaction (void)
           memmove (newadr, p, sz);
           p += Wsize_bsize (sz);
         }else{
-          Assert (Color_hd (q) == Caml_blue);
+          CAMLassert (Color_hd (q) == Caml_blue);
           p += Whsize_hd (q);
         }
       }
@@ -470,9 +489,9 @@ void caml_compact_heap (void)
       caml_stat_top_heap_wsz = caml_stat_heap_wsz;
     }
     do_compaction ();
-    Assert (caml_stat_heap_chunks == 1);
-    Assert (Chunk_next (caml_heap_start) == NULL);
-    Assert (caml_stat_heap_wsz == Wsize_bsize (Chunk_size (chunk)));
+    CAMLassert (caml_stat_heap_chunks == 1);
+    CAMLassert (Chunk_next (caml_heap_start) == NULL);
+    CAMLassert (caml_stat_heap_wsz == Wsize_bsize (Chunk_size (chunk)));
     CAML_INSTR_TIME (tmr, "compact/recompact");
   }
 }
@@ -488,7 +507,7 @@ void caml_compact_heap_maybe (void)
      We compact the heap if FP > caml_percent_max
   */
   float fw, fp;
-                                          Assert (caml_gc_phase == Phase_idle);
+                                          CAMLassert (caml_gc_phase == Phase_idle);
   if (caml_percent_max >= 1000000) return;
   if (caml_stat_major_collections < 3) return;
   if (caml_stat_heap_wsz <= 2 * caml_clip_heap_chunk_wsz (0)) return;
@@ -511,6 +530,9 @@ void caml_compact_heap_maybe (void)
   caml_gc_message (0x200, "FL size at phase change = %"
                           ARCH_INTNAT_PRINTF_FORMAT "u words\n",
                    (uintnat) caml_fl_wsz_at_phase_change);
+  caml_gc_message (0x200, "FL current size = %"
+                          ARCH_INTNAT_PRINTF_FORMAT "u words\n",
+                   (uintnat) caml_fl_cur_wsz);
   caml_gc_message (0x200, "Estimated overhead = %"
                           ARCH_INTNAT_PRINTF_FORMAT "u%%\n",
                    (uintnat) fp);
@@ -524,7 +546,10 @@ void caml_compact_heap_maybe (void)
     caml_gc_message (0x200, "Measured overhead: %"
                             ARCH_INTNAT_PRINTF_FORMAT "u%%\n",
                      (uintnat) fp);
+    if (fp >= caml_percent_max)
+         caml_compact_heap ();
+    else
+         caml_gc_message (0x200, "Automatic compaction aborted.\n", 0);
 
-    caml_compact_heap ();
   }
 }

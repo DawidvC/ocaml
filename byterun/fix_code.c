@@ -13,12 +13,16 @@
 /*                                                                        */
 /**************************************************************************/
 
+#define CAML_INTERNALS
+
 /* Handling of blocks of bytecode (endianness switch, threading). */
 
 #include "caml/config.h"
 
 #ifdef HAS_UNISTD
 #include <unistd.h>
+#else
+#include <io.h>
 #endif
 
 #include "caml/debugger.h"
@@ -159,7 +163,7 @@ void caml_thread_code (code_t code, asize_t len)
       p += l[instr];
     }
   }
-  Assert(p == code + len);
+  CAMLassert(p == code + len);
 }
 
 #else

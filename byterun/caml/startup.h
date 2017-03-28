@@ -16,6 +16,8 @@
 #ifndef CAML_STARTUP_H
 #define CAML_STARTUP_H
 
+#ifdef CAML_INTERNALS
+
 #include "mlvalues.h"
 #include "exec.h"
 
@@ -25,7 +27,15 @@ CAMLextern void caml_startup_code(
            code_t code, asize_t code_size,
            char *data, asize_t data_size,
            char *section_table, asize_t section_table_size,
+           int pooling,
            char **argv);
+
+CAMLextern value caml_startup_code_exn(
+  code_t code, asize_t code_size,
+  char *data, asize_t data_size,
+  char *section_table, asize_t section_table_size,
+  int pooling,
+  char **argv);
 
 enum { FILE_NOT_FOUND = -1, BAD_BYTECODE  = -2 };
 
@@ -37,5 +47,6 @@ extern int32_t caml_seek_optional_section(int fd, struct exec_trailer *trail,
 extern int32_t caml_seek_section(int fd, struct exec_trailer *trail,
                                  char *name);
 
+#endif /* CAML_INTERNALS */
 
 #endif /* CAML_STARTUP_H */
